@@ -14,7 +14,7 @@ bool DecodeMusicMp3(const std::function<int(uint8_t*, size_t)>& read,
         return false;
     esp_ae_rate_cvt_handle_t resampler = nullptr;
     int previous_rate = 0;
-    std::array<uint8_t, 8192> input;
+    std::vector<uint8_t> input(8192);  // heap: 8 KB on stack exceeds -Wframe-larger-than
     std::vector<int16_t> decoded(2304);
     size_t buffered = 0;
     bool eof = false, ok = true, had_audio = false;
