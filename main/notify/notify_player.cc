@@ -2,8 +2,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <memory>
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+#include "audio_codec.h"
+#include "music_stream.h"
+#endif
 
 #include <esp_log.h>
 
@@ -14,11 +19,19 @@
 namespace {
 constexpr int kHttpTimeoutMs = 5000;
 constexpr size_t kHttpReadBufferSize = 1024;
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+constexpr uint32_t kNotifyTaskStackSize = 32768;
+#else
 constexpr uint32_t kNotifyTaskStackSize = 6144;
+#endif
 constexpr UBaseType_t kNotifyTaskPriority = 2;
 const char* TAG = "NotifyPlayer";
 
 bool IsSupportedUrl(const std::string& url) {
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+    if (url.starts_with("/sdcard/music/") && url.find("..") == std::string::npos)
+        return true;
+#endif
     return url.compare(0, 7, "http://") == 0 || url.compare(0, 8, "https://") == 0;
 }
 }  // namespace
@@ -29,7 +42,7 @@ NotifyPlayer::~NotifyPlayer() { Stop(); }
 
 bool NotifyPlayer::Start(std::string audio_url, std::vector<NotifySubtitle> subtitles,
                          uint32_t playback_id, SubtitleCallback subtitle_callback,
-                         FinishedCallback finished_callback) {
+                         FinishedCallback finished_callback, bool mp3) {
     if (playback_id == 0 || !IsSupportedUrl(audio_url)) {
         return false;
     }
@@ -45,6 +58,7 @@ bool NotifyPlayer::Start(std::string audio_url, std::vector<NotifySubtitle> subt
             return false;
         }
         audio_url_ = std::move(audio_url);
+        mp3_ = mp3;
         subtitles_ = std::move(subtitles);
         displayed_text_.clear();
         subtitle_callback_ = std::move(subtitle_callback);
@@ -181,21 +195,68 @@ void NotifyPlayer::WorkerTask() {
     }
 
     bool success = false;
-    auto http = Board::GetInstance().GetNetwork()->CreateHttp(0);
-    if (http) {
-        http->SetTimeout(kHttpTimeoutMs);
-        http->SetHeader("Accept", "audio/ogg, application/ogg");
-        http->SetHeader("Accept-Encoding", "identity");
-        auto opened = http->Open("GET", audio_url);
-        if (opened) {
-            auto status = http->GetStatusCode();
-            if (status && *status >= 200 && *status < 300 && !IsCancelled(playback_id)) {
-                auto demuxer = std::make_unique<OggDemuxer>();
-                uint32_t media_position_ms = 0;
-                bool packet_error = false;
-                demuxer->OnPacket(
-                    [this, playback_id, &media_position_ms, &packet_error](
-                        const uint8_t* data, int sample_rate, int frame_duration_ms, size_t size) {
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+    if (mp3_) {
+        auto cancelled = [this, playback_id]() { return IsCancelled(playback_id); };
+        auto sink = [this, playback_id, &cancelled](std::vector<int16_t>&& pcm) {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (cancelled_ || !active_)
+                    return false;
+                playback_drained_ = false;
+                stream_started_ = true;
+            }
+            return audio_service_.PushMusicPcm(std::move(pcm), playback_id, cancelled);
+        };
+        const int rate = Board::GetInstance().GetAudioCodec()->output_sample_rate();
+        if (audio_url.starts_with("/sdcard/music/")) {
+            FILE* file = std::fopen(audio_url.c_str(), "rb");
+            if (file) {
+                success = DecodeMusicMp3(
+                    [file](uint8_t* data, size_t size) {
+                        size_t n = std::fread(data, 1, size, file);
+                        return std::ferror(file) ? -1 : static_cast<int>(n);
+                    },
+                    cancelled, rate, sink);
+                std::fclose(file);
+            }
+        } else {
+            auto http = Board::GetInstance().GetNetwork()->CreateHttp(2);
+            if (http) {
+                http->SetTimeout(kHttpTimeoutMs);
+                http->SetHeader("Accept-Encoding", "identity");
+                if (http->Open("GET", audio_url)) {
+                    auto status = http->GetStatusCode();
+                    if (status && *status == 200) {
+                        success = DecodeMusicMp3(
+                            [&http](uint8_t* data, size_t size) {
+                                auto n = http->Read(reinterpret_cast<char*>(data), size);
+                                return n ? static_cast<int>(*n) : -1;
+                            },
+                            cancelled, rate, sink);
+                    }
+                }
+                http->Close();
+            }
+        }
+    } else
+#endif
+    {
+        auto http = Board::GetInstance().GetNetwork()->CreateHttp(0);
+        if (http) {
+            http->SetTimeout(kHttpTimeoutMs);
+            http->SetHeader("Accept", "audio/ogg, application/ogg");
+            http->SetHeader("Accept-Encoding", "identity");
+            auto opened = http->Open("GET", audio_url);
+            if (opened) {
+                auto status = http->GetStatusCode();
+                if (status && *status >= 200 && *status < 300 && !IsCancelled(playback_id)) {
+                    auto demuxer = std::make_unique<OggDemuxer>();
+                    uint32_t media_position_ms = 0;
+                    bool packet_error = false;
+                    demuxer->OnPacket([this, playback_id, &media_position_ms, &packet_error](
+                                          const uint8_t* data, int sample_rate,
+                                          int frame_duration_ms, size_t size) {
                         if (packet_error || IsCancelled(playback_id)) {
                             packet_error = true;
                             return;
@@ -228,40 +289,41 @@ void NotifyPlayer::WorkerTask() {
                         media_position_ms += frame_duration_ms;
                     });
 
-                std::array<char, kHttpReadBufferSize> buffer;
-                while (!packet_error && !IsCancelled(playback_id)) {
-                    auto size = http->Read(buffer.data(), buffer.size());
-                    if (!size) {
-                        ESP_LOGE(TAG, "Notification HTTP read failed: %s",
-                                 size.error().ToString().c_str());
-                        break;
-                    }
-                    if (*size == 0) {
-                        success = demuxer->Finish();
-                        if (!success) {
-                            ESP_LOGE(
-                                TAG,
-                                "Notification Ogg stream ended before a complete audio stream");
+                    std::array<char, kHttpReadBufferSize> buffer;
+                    while (!packet_error && !IsCancelled(playback_id)) {
+                        auto size = http->Read(buffer.data(), buffer.size());
+                        if (!size) {
+                            ESP_LOGE(TAG, "Notification HTTP read failed: %s",
+                                     size.error().ToString().c_str());
+                            break;
                         }
-                        break;
+                        if (*size == 0) {
+                            success = demuxer->Finish();
+                            if (!success) {
+                                ESP_LOGE(
+                                    TAG,
+                                    "Notification Ogg stream ended before a complete audio stream");
+                            }
+                            break;
+                        }
+                        demuxer->Process(reinterpret_cast<const uint8_t*>(buffer.data()), *size);
+                        if (demuxer->HasError()) {
+                            packet_error = true;
+                        }
                     }
-                    demuxer->Process(reinterpret_cast<const uint8_t*>(buffer.data()), *size);
-                    if (demuxer->HasError()) {
-                        packet_error = true;
-                    }
+                } else if (!status) {
+                    ESP_LOGE(TAG, "Notification HTTP status failed: %s",
+                             status.error().ToString().c_str());
+                } else {
+                    ESP_LOGE(TAG, "Notification HTTP request returned status %d", *status);
                 }
-            } else if (!status) {
-                ESP_LOGE(TAG, "Notification HTTP status failed: %s",
-                         status.error().ToString().c_str());
             } else {
-                ESP_LOGE(TAG, "Notification HTTP request returned status %d", *status);
+                ESP_LOGE(TAG, "Failed to open notification HTTP request: %s",
+                         opened.error().ToString().c_str());
             }
-        } else {
-            ESP_LOGE(TAG, "Failed to open notification HTTP request: %s",
-                     opened.error().ToString().c_str());
+            http->Close();
+            http.reset();
         }
-        http->Close();
-        http.reset();
     }
 
     FinishedCallback callback;

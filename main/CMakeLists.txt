@@ -45,6 +45,10 @@ set(SOURCES "audio/audio_codec.cc"
 
 set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
 
+if(CONFIG_WAVESHARE_NAS_TF_MUSIC)
+    list(APPEND SOURCES "audio/music_stream.cc")
+endif()
+
 # Add board common files
 list(APPEND SOURCES
     "boards/common/board.cc"
@@ -1094,6 +1098,9 @@ if(CONFIG_IDF_TARGET_ESP32S3)
 endif()
 
 set(MAIN_PRIV_REQUIRES_EXTRA "")
+if(CONFIG_WAVESHARE_NAS_TF_MUSIC)
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA sdmmc esp_driver_sdmmc)
+endif()
 if(CONFIG_XIAOZHI_NETWORK_ETHERNET AND CONFIG_XIAOZHI_ETH_PHY_IP101)
     list(APPEND MAIN_PRIV_REQUIRES_EXTRA espressif__ip101)
 endif()

@@ -5,6 +5,9 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+void InitializeAudioBoardMusicTools();
+#endif
 
 #include <esp_log.h>
 #include "i2c_device.h"
@@ -209,6 +212,13 @@ public:
         #endif
         InitializeCamera();
         GetBacklight()->RestoreBrightness();
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+        // Schematic v1.1: SD DAT3 is on TCA9555 P03. Keep high for 1-bit SD mode.
+        ESP_ERROR_CHECK(
+            esp_io_expander_set_dir(io_expander, IO_EXPANDER_PIN_NUM_3, IO_EXPANDER_OUTPUT));
+        ESP_ERROR_CHECK(esp_io_expander_set_level(io_expander, IO_EXPANDER_PIN_NUM_3, 1));
+        InitializeAudioBoardMusicTools();
+#endif
     }
 
     virtual Led* GetLed() override {

@@ -849,6 +849,13 @@ choice DISPLAY_ESP32S3_CAM_XXXX
         bool "1.83inch Touch LCD Module"
 endchoice
 
+config WAVESHARE_NAS_TF_MUSIC
+    bool "Enable NAS MP3 and TF music tools"
+    depends on BOARD_TYPE_WAVESHARE_ESP32_S3_AUDIO_BOARD
+    default n
+    help
+        Network MP3 playback and read-only FAT TF library. Official cloud remains unchanged.
+
 choice DISPLAY_ESP32S3_AUDIO_BOARD
     depends on BOARD_TYPE_WAVESHARE_ESP32_S3_AUDIO_BOARD
     prompt "ESP32S3_AUDIO_BOARD LCD Type"

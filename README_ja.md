@@ -1,3 +1,5 @@
+> 本仓库为 NAS / TF 音乐改造版，请先阅读 [项目 README](README.md)。以下为上游原始说明。
+
 # MCP ベースのチャットボット
 
 （日本語 | [中文](README_zh.md) | [English](README.md)）
