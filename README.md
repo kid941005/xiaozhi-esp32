@@ -1,57 +1,48 @@
-# XiaoZhi NAS / TF Music
+# XiaoZhi NAS Music（bread-compact-wifi / ESP32-S3-N16R8）
 
-为 **Waveshare ESP32-S3-AUDIO-Board** 增加 NAS MP3 点歌和 TF 卡 MP3 播放，继续使用 **xiaozhi.me 官方服务器**。
+在 [78/xiaozhi-esp32](https://github.com/78/xiaozhi-esp32) **v2.6.0**（上游 `4de00ae`）基础上，为 **面包板 bread-compact-wifi（ESP32-S3-N16R8，SSD1306 128x32）** 增加 NAS 音乐播放能力，继续使用官方/自建 xiaozhi 服务器。
 
-基于 [78/xiaozhi-esp32](https://github.com/78/xiaozhi-esp32) v2.5.2（`49b4380b3faa0ceadd28a3e78aaf0f311c46c57e`）。这是社区改造版本，与小智、微雪官方无隶属关系。保留上游源码与来源信息；原说明见 [README_UPSTREAM.md](README_UPSTREAM.md)。
+音乐子系统源码来自社区项目 [jianglixi-oss/xiaozhi-nas-tf-music](https://github.com/jianglixi-oss/xiaozhi-nas-tf-music)（`592704a`），已按 LF 归一化导入并合并上游 v2.6.0。本项目与小智、微雪官方无隶属关系；上游原始说明见 [README_UPSTREAM.md](README_UPSTREAM.md)。
 
-## 已验证
+## 本 fork 相对上游的差异（13 个固件文件）
 
-2026-10-17，用户在 Waveshare ESP32-S3-AUDIO-Board 上确认 **TF 卡播放、飞牛 NAS 语音点歌播放均通过**。NAS 端另验证了 MP3 HTTP 下载与签名拒绝。其他板型、屏幕变体、完整异常场景和所有网络模式尚未逐项验收。
+| 文件 | 改动 |
+|---|---|
+| `main/audio/music_stream.{h,cc}` | MP3 解码（`esp_mp3_dec_*` + `esp_ae_rate_cvt`→24 kHz、ID3v2 跳过、8 KB 解码缓冲在堆上） |
+| `main/audio/audio_service.{h,cc}` | `PushMusicPcm` 音乐 PCM 播放队列 |
+| `main/notify/notify_player.{h,cc}` | mp3 源复用通知播放器 |
+| `main/application.{h,cc}` | `RequestMusic` / `RequestMusicStop` / `GetMusicStatus` |
+| `main/boards/bread-compact-wifi/music_tools.cc` | 设备侧 MCP：`self.music.play_url` / `self.music.status` / `self.music.stop` |
+| `main/boards/bread-compact-wifi/config.json` | 新增变体 `bread-compact-wifi-music` |
+| `main/Kconfig.projbuild`、`main/CMakeLists.txt` | `CONFIG_WAVESHARE_NAS_TF_MUSIC` 开关与源文件选择 |
 
-## HomePod（当前主分支）
+> TF/SD 工具只在微雪 `esp32-s3-audio-board-music` 变体编译；本板无 SD 引脚，`music_tools.cc` 只保留 play_url / status / stop。
 
-NAS MCP 可通过 Home Assistant 向配置的 HomePod 搜歌投放并停止播放，用户已于 2026-10-22 确认播放、停止通过。无需重刷板子固件。配置见 [NAS 说明](nas-music/README.md#homepod-播放可选)。HA token 只保存在私有 `.env` 中。立体声同步尚未验证。
+## 两条播放路径（都能出声，互不替代）
 
-此功能尚未包含在 v0.1.0 发布附件中，请使用当前主分支的 NAS 源码。
+1. **服务端插件路径**（官方原版固件同样可用）：`play_music` 函数 → 服务端 ffmpeg/pydub 解码 → 24 kHz 单声道 Opus → TTS 队列。说“播放某某”即可触发；曲库来自容器内 `music_dir`（默认 `/opt/xiaozhi/music`）。
+2. **设备本地直链路径**（本 fork 独有）：服务返回音频直链 → 调 `self.music.play_url` → 设备本地 MP3 解码播放；播放期间关闭语音处理（`EnableVoiceProcessing(false)`），可用唤醒词打断。
 
-## 快速开始
+## 编译与烧写
 
-1. 从 [Releases](https://github.com/jianglixi-oss/xiaozhi-nas-tf-music/releases) 下载固件包和 NAS 包。预编译固件仅适用于上述板型、默认 JD9853 屏幕。
-2. 备份当前 Flash；解压固件包，将 `merged-binary.bin` 作为合并镜像从 **0x0** 烧录。合并烧录可能覆盖配网与绑定数据，之后按小智正常流程配网、绑定。
-3. TF：使用 FAT32 文件系统，在卡根目录创建 `music`，放入 MP3。语音说“播放 TF 卡里的某某”。最多索引 1000 首、四层子目录；挂载失败不会格式化卡。容量主要受 FAT32 格式与卡兼容性影响，未验证所有容量；exFAT 不支持。
-4. NAS：按 [NAS 部署说明](nas-music/README.md) 配置 MCP 接入点、音乐目录和内网 IP，启动 Docker 服务。
-5. 在小智角色配置中加入下方工具调用提示，再说“从 NAS 播放某某”。
-
-```text
-播放 NAS 音乐时先调用 nas_music_search，选择用户要求的歌曲和版本，
-再调用选中结果的 device_tool，原样传入 device_arguments。
-播放 TF 音乐时先 self.music.tf_search，再 self.music.tf_play。
-停止使用 self.music.stop，查询状态使用 self.music.status。
-只有工具报告实际播放时才说明已播放，排队不代表已经出声。
-```
-
-## 工作方式与限制
-
-- NAS MCP 按 MP3 文件名搜索；设备通过局域网 HTTP 拉流、解码并输出。签名 URL 有效期 15 分钟。
-- TF 本地文件读取无需 NAS；语音指令和点歌仍依赖官方云端。
-- 支持停止、现有音量控制，唤醒或 BOOT 返回对话。输出为单声道。
-- 暂不支持 FLAC/AAC、暂停续播、自动连播、上下首、进度跳转、歌词。
-- 直接读取共享音乐目录，不调用飞牛音乐私有 API，不读取收藏或歌单。
-- 音乐变体关闭自动安装官方 OTA；后续升级需手动使用适配的音乐固件。
-- 原版官方固件没有音乐设备工具，单独部署 NAS MCP 无法完成播放。
-
-## 开发与反馈
-
-ESP-IDF 最低 6.0.1，推荐 6.1。激活 SDK 后执行：
+ESP-IDF 需 **6.1（release/v6.1）**，最低 6.0.1。Windows 下用 PowerShell 的 `export.ps1` 激活环境。
 
 ```sh
-python scripts/build.py waveshare/esp32-s3-audio-board --name esp32-s3-audio-board-music --zip
-python -m pip install -r nas-music/requirements.txt
-python -m unittest discover -s nas-music -p 'test_*.py' -v
+python scripts/build.py bread-compact-wifi --name bread-compact-wifi-music --language zh-CN --zip
 ```
 
-更完整的硬件、编译与验收说明见 [MUSIC_SETUP.md](MUSIC_SETUP.md)。反馈请使用 Issues，提交前去除 token、签名 URL、Wi-Fi 和账号信息。见 [贡献指南](CONTRIBUTING.md)、[路线图](ROADMAP.md) 和 [变更记录](CHANGELOG.md)。
+- **`--language zh-CN` 必加**：v2.6.0 默认 en-US，会选中 `wn9_hiesp`（Hi ESP）唤醒词；中文构建把 `wn9_nihaoxiaozhi_tts`（你好小智）打包进 assets 分区。
+- 产物：`releases/v2.6.0_bread-compact-wifi-music.zip`（内含 `merged-binary.bin`）。
+- 首次全量烧录 `0x0` 会清空 NVS（需重新配网与激活）；只升级应用时把 `build/xiaozhi.bin` 烧到 `0x20000`，保留配网与激活。
+
+## 已知限制
+
+- 板级输出固定 24 kHz 单声道（`config.h` 的 `AUDIO_OUTPUT_SAMPLE_RATE 24000` + NoAudioCodec Simplex），无损音源收益≈0。
+- 设备本地路径只解 MP3（`music_stream.cc` 仅调用 `esp_mp3_dec_*`）；FLAC/M4A/AAC/OGG 由服务端插件路径支持。
+- 服务端插件路径播放时麦克风不关闭，可能把自己播放的音乐识别为环境噪音。
+- 无暂停续播、上下首、进度跳转、歌词；TF 功能仅微雪变体。
+- 上游同步评估见 `docs/merge_v2.6.0_assessment.md`，仓库核查见 `docs/repo_audit_v2.6.0.md`。
 
 ## 来源与许可
 
-沿用 [MIT 许可证](LICENSE)，保留上游版权声明。MCP 桥接程序来自 [78/mcp-calculator](https://github.com/78/mcp-calculator)，该项目 README 声明 MIT；详见 [第三方说明](THIRD_PARTY_NOTICES.md)。第三方组件各自的许可证继续适用。
+沿用 [MIT 许可证](LICENSE)，保留上游版权声明。MCP 桥接程序来自 [78/mcp-calculator](https://github.com/78/mcp-calculator)（MIT）；第三方组件各自许可证继续适用，详见 [第三方说明](THIRD_PARTY_NOTICES.md)。

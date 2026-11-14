@@ -1,7 +1,7 @@
-# Waveshare ESP32-S3-AUDIO-Board：NAS / TF 音乐改造
+# 面包板 bread-compact-wifi / 微雪 ESP32-S3-AUDIO-Board：NAS 音乐改造
 
-基于官方 v2.5.2，提交 `49b4380b3faa0ceadd28a3e78aaf0f311c46c57e`。
-仍使用 xiaozhi.me 官方服务器。新增功能只在 `esp32-s3-audio-board-music` 变体启用。
+基于官方 **v2.6.0**（上游 `4de00ae`），音乐子系统来自 jianglixi-oss/xiaozhi-nas-tf-music `592704a`（LF 归一化导入）。
+仍使用官方/自建 xiaozhi 服务器。新增功能在 `bread-compact-wifi-music`（本仓库主力：ESP32-S3-N16R8 + SSD1306 128x32）与 `esp32-s3-audio-board-music`（微雪，含 TF）两个变体启用。
 
 ## 当前范围
 
@@ -13,7 +13,7 @@
 - TF 文件播放本身无需 NAS，语音点歌仍依赖官方云端。未增加离线按键点歌。
 - 此工程必须编译通过并在真实硬件上测试后，才能认定功能可用。
 
-## 硬件
+## 硬件（TF 部分仅微雪板）
 
 微雪原理图 v1.1：SD CLK=GPIO40、D0=GPIO41、CMD=GPIO42，使用 SDMMC 1-bit。
 DAT3 由 TCA9555 P03 拉高。LCD SPI 和音频 I2S 引脚保持官方设置。
@@ -30,6 +30,9 @@ VS Code 安装 Espressif 官方 `ESP-IDF` 扩展（`espressif.esp-idf-extension`
 ```powershell
 ./build-music.ps1
 # 或在已激活的 ESP-IDF 环境中：
+# 本仓库主力（面包板）—— --language zh-CN 必加，否则唤醒词变英文
+python scripts/build.py bread-compact-wifi --name bread-compact-wifi-music --language zh-CN --zip
+# 微雪板（含 TF）
 python scripts/build.py waveshare/esp32-s3-audio-board --name esp32-s3-audio-board-music --zip
 ```
 
@@ -93,11 +96,12 @@ NAS 搜歌不需要开放 NAS 管理端口，也不需要提供飞牛账号密�
 - 2026-10-17：用户已烧录，并确认 TF 卡播放和飞牛 NAS 语音点歌通过；NAS 服务已连接官方 MCP。
 - 其余验收清单尚未逐项验证，不代表所有板型、卡容量和网络模式均已覆盖。
 
-交付文件：
+## 本 fork 交付物与实测
 
-- `releases/xiaozhi-nas-tf-music-v0.1.0-waveshare-jd9853.zip`：内含 `merged-binary.bin`，合并镜像起始地址为 `0x0`。
-- `releases/xiaozhi-nas-tf-music-v0.1.0-nas.zip`：NAS 端源码与 Docker 部署配置，不含账号或 token。
-- `releases/SHA256SUMS.txt`：两个压缩包的 SHA-256 校验值。
+- `releases/v2.6.0_bread-compact-wifi-music.zip`：内含 `merged-binary.bin`，合并镜像起始 `0x0`；也可只烧 `build/xiaozhi.bin` 到 `0x20000` 保留 NVS。
+- 2026-11-15 zh-CN 完整编译通过：`BUILD_EXIT=0`、`warning:` 计数 0；app 2,556,800 B（md5 `0ef554ff254dd217e613fd53110dc92a`）、merged 8,949,619 B。
+- 真机已验证：唤醒词「你好小智」正常、服务端 `play_music` 点歌出声、设备工具 `self.music.play_url/status/stop` 注册成功。
+- 历史 v0.1.0 交付（原作者微雪验证）见 git 历史；`scripts/package_music_release.py` 已参数化，用法：`python scripts/package_music_release.py --firmware releases/v2.6.0_bread-compact-wifi-music.zip --version v0.2.0 --board bread-compact-wifi`。
 
 固件保持官方默认 JD9853 屏幕变体；ST7789 屏幕需要选择对应配置后重新编译。
 首次刷写前备份当前固件及 Flash。合并镜像刷写可能覆盖配网/绑定等持久化数据。

@@ -922,7 +922,6 @@ endchoice
 config WAVESHARE_NAS_TF_MUSIC
     bool "Enable NAS MP3 music tools"
     depends on BOARD_TYPE_WAVESHARE_ESP32_S3_AUDIO_BOARD || BOARD_TYPE_BREAD_COMPACT_WIFI
-    default y if BOARD_TYPE_BREAD_COMPACT_WIFI
     default n
     help
         Network MP3 playback. TF library is only built for boards with an SD slot.

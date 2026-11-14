@@ -1,7 +1,7 @@
 name: Music checks
 on:
   push:
-    branches: [main]
+    branches: [main, music/bread-compact-wifi, music/sync-260]
   pull_request:
     branches: [main]
   workflow_dispatch:
