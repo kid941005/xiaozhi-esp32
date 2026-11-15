@@ -297,6 +297,15 @@ void Application::Run() {
 
         if (bits & MAIN_EVENT_CLOCK_TICK) {
             clock_ticks_++;
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+            if (!pending_music_.empty() && GetDeviceState() == kDeviceStateIdle &&
+                !notify_player_.IsBusy() && audio_service_.IsPlaybackIdle() &&
+                (!protocol_ || !protocol_->IsAudioChannelOpened())) {
+                auto source = std::move(pending_music_);
+                pending_music_.clear();
+                StartNotification(std::move(source), {}, true);
+            }
+#endif
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
 
@@ -529,12 +538,15 @@ void Application::CheckNewVersion() {
         retry_count = 0;
         retry_delay = 10;  // Reset retry delay
 
+        // Custom music images must not silently be replaced by stock OTA.
+#ifndef CONFIG_WAVESHARE_NAS_TF_MUSIC
         if (ota_->HasNewVersion()) {
             if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
                 return;  // This line will never be reached after reboot
             }
             // If upgrade failed, continue to normal operation
         }
+#endif
 
         // No new version, mark the current version as valid
         ota_->MarkCurrentVersionValid();
@@ -609,6 +621,14 @@ void Application::InitializeProtocol() {
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+            // A delayed disconnect callback from the previous voice session
+            // must not move active music playback back to idle.
+            if (music_playback_) {
+                Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+                return;
+            }
+#endif
             auto display = Board::GetInstance().GetDisplay();
             display->SetChatMessage("system", "");
             SetDeviceState(kDeviceStateIdle);
@@ -662,6 +682,10 @@ void Application::InitializeProtocol() {
             }
             if (strcmp(state->valuestring, "start") == 0) {
                 Schedule([this]() {
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+                    if (!pending_music_.empty() || music_playback_)
+                        return;
+#endif
                     aborted_ = false;
                     SetDeviceState(kDeviceStateSpeaking);
                 });
@@ -1204,7 +1228,47 @@ void Application::ConfigureWakeWordForListening() {
 #endif
 }
 
-void Application::StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles) {
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+void Application::RequestMusic(std::string source) {
+    Schedule([this, source = std::move(source)]() {
+        auto state = GetDeviceState();
+        if (state != kDeviceStateIdle && state != kDeviceStateListening &&
+            state != kDeviceStateSpeaking && state != kDeviceStateNotifying) {
+            music_status_ = 4;
+            return;
+        }
+        pending_music_ = source;
+        if (state == kDeviceStateNotifying)
+            StopNotification();
+        music_status_ = 1;
+        // Tool replies use SendMcpMessage -> Schedule as well. This second
+        // scheduling turn lets that reply be sent before closing WebSocket.
+        Schedule([this, source]() {
+            if (pending_music_ != source)
+                return;
+            if (GetDeviceState() == kDeviceStateSpeaking)
+                AbortSpeaking(kAbortReasonNone);
+            if (protocol_ && protocol_->IsAudioChannelOpened())
+                protocol_->CloseAudioChannel();
+            audio_service_.EnableVoiceProcessing(false);
+            audio_service_.ResetDecoder();
+            SetDeviceState(kDeviceStateIdle);
+        });
+    });
+}
+
+void Application::RequestMusicStop() {
+    Schedule([this]() {
+        pending_music_.clear();
+        if (GetDeviceState() == kDeviceStateNotifying)
+            StopNotification();
+        music_status_ = 5;
+    });
+}
+#endif
+
+void Application::StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles,
+                                    bool mp3) {
     if (GetDeviceState() != kDeviceStateIdle || notify_player_.IsBusy()) {
         ESP_LOGW(TAG, "Ignoring notify message while device is busy");
         return;
@@ -1226,10 +1290,17 @@ void Application::StartNotification(std::string audio_url, std::vector<NotifySub
 
     audio_service_.ResetDecoder();
     uint32_t playback_id = ++notification_playback_id_;
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+    music_playback_ = mp3;
+    if (mp3)
+        music_status_ = 2;
+#endif
     if (playback_id == 0) {
         playback_id = ++notification_playback_id_;
     }
-    audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+    if (!mp3) {
+        audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+    }
 
     bool started = notify_player_.Start(
         std::move(audio_url), std::move(subtitles), playback_id,
@@ -1242,15 +1313,25 @@ void Application::StartNotification(std::string audio_url, std::vector<NotifySub
         },
         [this](uint32_t id, bool success) {
             Schedule([this, id, success]() { HandleNotificationFinished(id, success); });
-        });
+        },
+        mp3);
 
     if (!started) {
         ESP_LOGE(TAG, "Failed to start notification playback");
         StopNotification();
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+        if (mp3)
+            music_status_ = 4;
+#endif
     }
 }
 
 void Application::StopNotification() {
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+    if (music_playback_)
+        music_status_ = 5;
+    music_playback_ = false;
+#endif
     notify_player_.Stop();
     audio_service_.ResetDecoder();
     auto& board = Board::GetInstance();
@@ -1267,7 +1348,17 @@ void Application::HandleNotificationFinished(uint32_t playback_id, bool success)
     }
     ESP_LOGI(TAG, "Notification playback %lu %s", static_cast<unsigned long>(playback_id),
              success ? "completed" : "failed");
+    bool was_music = false;
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+    was_music = music_playback_;
+#endif
     StopNotification();
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+    if (was_music)
+        music_status_ = success ? 3 : 4;
+#else
+    (void)was_music;
+#endif
 }
 
 void Application::Schedule(std::function<void()>&& callback) {

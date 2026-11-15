@@ -26,7 +26,8 @@ public:
     ~NotifyPlayer();
 
     bool Start(std::string audio_url, std::vector<NotifySubtitle> subtitles, uint32_t playback_id,
-               SubtitleCallback subtitle_callback, FinishedCallback finished_callback);
+               SubtitleCallback subtitle_callback, FinishedCallback finished_callback,
+               bool mp3 = false);
     void Stop();
     void OnPlaybackProgress(uint32_t playback_id, uint32_t media_position_ms);
     void OnPlaybackDrained();
@@ -53,6 +54,7 @@ private:
     bool stream_started_ = false;
     bool playback_drained_ = false;
     bool completion_reported_ = false;
+    bool mp3_ = false;
 
     static void WorkerEntry(void* arg);
     void WorkerTask();

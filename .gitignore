@@ -18,3 +18,16 @@ main/mmap_generate_emoji.h
 *.bin
 mmap_generate_*.h
 .clangd
+.test-tmp/
+host-tests.log
+firmware-build.log
+idf-export.log
+nas-tests.log
+board-matrix.json
+__pycache__/
+
+nas-music/DEPLOYED.md
+nas-music/deps/
+.env.*
+!.env.example
+*.log

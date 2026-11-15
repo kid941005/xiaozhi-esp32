@@ -21,6 +21,10 @@
 
 #define TAG "CompactWifiBoard"
 
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+void InitializeAudioBoardMusicTools();
+#endif
+
 class CompactWifiBoard : public WifiBoard {
 private:
     i2c_master_bus_handle_t display_i2c_bus_;
@@ -162,6 +166,9 @@ public:
         InitializeSsd1306Display();
         InitializeButtons();
         InitializeTools();
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+        InitializeAudioBoardMusicTools();
+#endif
     }
 
     virtual Led* GetLed() override {

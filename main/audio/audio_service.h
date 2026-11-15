@@ -142,6 +142,10 @@ public:
 
     void SetCallbacks(AudioServiceCallbacks& callbacks);
 
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+    bool PushMusicPcm(std::vector<int16_t>&& pcm, uint32_t playback_id,
+                      const std::function<bool()>& cancelled);
+#endif
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
     void PlaySound(const std::string_view& sound);

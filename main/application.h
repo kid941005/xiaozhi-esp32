@@ -6,12 +6,13 @@
 #include <freertos/task.h>
 #include <esp_timer.h>
 
-#include <string>
-#include <mutex>
-#include <deque>
-#include <memory>
-#include <functional>
+#include <atomic>
 #include <cstdint>
+#include <deque>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
 #include <vector>
 
 #include "protocol.h"
@@ -119,6 +120,11 @@ public:
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+    void RequestMusic(std::string source);
+    void RequestMusicStop();
+    int GetMusicStatus() const { return music_status_.load(); }
+#endif
     AudioService& GetAudioService() { return audio_service_; }
     
     /**
@@ -129,6 +135,12 @@ public:
     void ResetProtocol();
 
 private:
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+    std::string pending_music_;
+    // 0=idle, 1=queued, 2=playing, 3=completed, 4=failed, 5=stopped.
+    std::atomic<int> music_status_{0};
+    bool music_playback_ = false;
+#endif
     Application();
     ~Application();
 
@@ -177,7 +189,8 @@ private:
     void ConfigureWakeWordForListening();
     void ShowStartupWakeWordHint();
     void HideStartupWakeWordHint();
-    void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles);
+    void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles,
+                           bool mp3 = false);
     void StopNotification();
     void HandleNotificationFinished(uint32_t playback_id, bool success);
 

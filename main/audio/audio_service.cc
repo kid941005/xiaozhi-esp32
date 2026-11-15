@@ -606,6 +606,29 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
     }
 }
 
+#ifdef CONFIG_WAVESHARE_NAS_TF_MUSIC
+bool AudioService::PushMusicPcm(std::vector<int16_t>&& pcm, uint32_t playback_id,
+                                const std::function<bool()>& cancelled) {
+    std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    auto generation = playback_generation_;
+    while (audio_playback_queue_.full()) {
+        if (service_stopped_ || generation != playback_generation_ || cancelled())
+            return false;
+        audio_queue_cv_.wait_for(lock, std::chrono::milliseconds(20));
+    }
+    if (service_stopped_ || generation != playback_generation_ || cancelled())
+        return false;
+    AudioTask task;
+    task.type = kAudioTaskTypeDecodeToPlaybackQueue;
+    task.playback_id = playback_id;
+    task.pcm = std::move(pcm);
+    audio_playback_queue_.push_back(std::move(task));
+    playback_drained_notified_ = false;
+    audio_queue_cv_.notify_all();
+    return true;
+}
+#endif
+
 bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     const uint32_t generation = playback_generation_;
